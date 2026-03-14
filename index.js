@@ -132,9 +132,9 @@ app.get("/weather/advisory", async (req, res) => {
 });
 app.post("/messages/notify", async (req, res) => {
   try {
-    const { recipientUid, senderName, message } = req.body;
+    const { recipientUid, senderUid, senderName, message } = req.body;
 
-    if (!recipientUid || !senderName || !message) {
+    if (!recipientUid || !senderUid || !senderName || !message) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
@@ -158,8 +158,9 @@ app.post("/messages/notify", async (req, res) => {
       },
       data: {
         type: "chat",
-        senderName,
-        message,
+        senderId: senderUid,
+        senderName: senderName,
+        message: message,
       },
       android: {
         notification: {
