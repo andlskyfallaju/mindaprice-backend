@@ -60,13 +60,21 @@ app.post("/advisories/send", requireAuth, requireAdmin, async (req, res) => {
 
     // Push to all devices subscribed to topic
     await admin.messaging().send({
-      topic: "advisories",
-      notification: {
-        title: "Farming Advisory",
-        body: message,
-      },
-      data: { type: "advisory" },
-    });
+  topic: "advisories",
+  notification: {
+    title: "Farming Advisory",
+    body: message,
+  },
+  data: {
+    type: "advisory",
+  },
+  android: {
+    notification: {
+      channelId: "advisory_channel",
+      priority: "high",
+    },
+  },
+});
 
     return res.json({ success: true });
   } catch (e) {
