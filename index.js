@@ -8,8 +8,8 @@ app.use(express.json());
 
 // Initialize Gemini with the API Key from environment variables
 // Note: You must set this in your Render dashboard environment variables
-const ai = new GoogleGenAI({ 
-  apiKey: process.env.GEMINI_API_KEY || "AIzaSyCJ2hkxlQUgErB6pOAZv3SwbF2DAfNaAdM" // Fallback solely for debug
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY
 });
 
 // Helper function to fetch weather data for a location (defaulting to Harare)
@@ -85,21 +85,21 @@ app.post("/advisories/send", requireAuth, requireAdmin, async (req, res) => {
 
     // Push to all devices subscribed to topic
     await admin.messaging().send({
-  topic: "advisories",
-  notification: {
-    title: "Farming Advisory",
-    body: message,
-  },
-  data: {
-    type: "advisory",
-  },
-  android: {
-    notification: {
-      channelId: "advisory_channel",
-      priority: "high",
-    },
-  },
-});
+      topic: "advisories",
+      notification: {
+        title: "Farming Advisory",
+        body: message,
+      },
+      data: {
+        type: "advisory",
+      },
+      android: {
+        notification: {
+          channelId: "advisory_channel",
+          priority: "high",
+        },
+      },
+    });
 
     return res.json({ success: true });
   } catch (e) {
@@ -139,11 +139,11 @@ app.get("/weather/advisory", async (req, res) => {
     if (rainProb >= 70 || rainMm > 3) {
       advisory =
         "High chance of rain. Delay fertilizer application and prepare drainage.";
-    } 
+    }
     else if (wind > 25) {
       advisory =
         "Strong winds expected. Secure light farm materials and avoid spraying.";
-    } 
+    }
     else if (temp > 32) {
       advisory =
         "High temperatures expected. Water crops early and monitor heat stress.";
@@ -193,7 +193,7 @@ app.post("/advisories/ai-draft", requireAuth, async (req, res) => {
       model: 'gemini-2.5-flash',
       contents: prompt,
     });
-    
+
     return res.json({ result: response.text.trim() });
   } catch (error) {
     console.error("Gemini Error:", error);
@@ -208,7 +208,7 @@ app.get("/advisories/trigger-ai", async (req, res) => {
   const providedSecret = req.query.secret || req.headers["x-cron-secret"];
 
   if (providedSecret !== expectedSecret) {
-     return res.status(403).send("Unauthorized");
+    return res.status(403).send("Unauthorized");
   }
 
   try {
