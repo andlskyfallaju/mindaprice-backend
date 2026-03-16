@@ -113,11 +113,12 @@ app.get("/health", (_, res) => res.json({ ok: true }));
 const port = process.env.PORT || 8080;
 app.listen(port, () => console.log("Server running on port", port));
 
-app.get("/weather/advisory", async (req, res) => {
+ app.get("/weather/advisory", async (req, res) => {
   try {
 
-    const latitude = "-17.8292";   // Harare default
-    const longitude = "31.0522";
+    // Pull from query parameters if provided, else default to Harare central
+    const latitude = req.query.lat || "-17.8292";   
+    const longitude = req.query.lon || "31.0522";
 
     const url =
       `https://api.open-meteo.com/v1/forecast?latitude=${latitude}` +
@@ -212,15 +213,42 @@ app.get("/advisories/trigger-ai", async (req, res) => {
   }
 
   try {
-    const liveWeather = await getDailyWeather();
-    if (!liveWeather) return res.status(500).send("Failed to fetch weather data.");
+    // Top 5 Agricultural Provinces in Zimbabwe
+    const provinces = [
+      { name: "Harare Province", lat: -17.8292, lon: 31.0522 },
+      { name: "Matebeleland Province", lat: -20.1500, lon: 28.5833 },
+      { name: "Manicaland Province", lat: -18.9728, lon: 32.6694 },
+      { name: "Midlands Province", lat: -19.4500, lon: 29.8167 },
+      { name: "Masvingo Province", lat: -20.0833, lon: 30.8333 },
+    ];
+
+    let combinedWeatherContext = "";
+
+    // Fetch weather for all provinces
+    for (const p of provinces) {
+      const weather = await getDailyWeather(p.lat, p.lon);
+      if (weather) {
+        combinedWeatherContext += `${p.name}: Temp: ${weather.temp}°C, Precipitation: ${weather.rain}mm, Wind speed: ${weather.wind}km/h.\n`;
+      }
+    }
+
+    if (!combinedWeatherContext) {
+      return res.status(500).send("Failed to fetch weather data for any province.");
+    }
 
     const prompt = `
       You are an expert agricultural advisor for MindaPrice ZW, a farming app in Zimbabwe.
-      Generate a short, actionable, and encouraging daily farming advisory broadcast (max 2-3 sentences).
-      The current weather today is Temp: ${liveWeather.temp}°C, Precipitation: ${liveWeather.rain}mm, Wind speed: ${liveWeather.wind}km/h.
-      Provide practical advice directly to farmers based ONLY on this weather.
-      Do NOT include placeholders, greetings, or sign-offs.
+      Generate a daily farming advisory broadcast covering the major provinces. Keep it extremely concise and actionable.
+
+      Here is the current weather data for today:
+      ${combinedWeatherContext}
+
+      Format the output exactly like this (use emojis where appropriate, no introduction or conclusion paragraphs):
+
+      📍 [Province Name]: [Temp]°C ([Rain]mm rain, [Wind]km/h wind)
+      Advisory: [1-2 sentences of specific farming advice based on this exact weather pattern]
+
+      (Repeat for each province provided)
     `;
 
     const generatedResponse = await ai.models.generateContent({
