@@ -204,7 +204,7 @@ app.post("/advisories/ai-draft", requireAuth, async (req, res) => {
 // ---- GET /advisories/trigger-ai  (automated cron webhook) ----
 app.get("/advisories/trigger-ai", async (req, res) => {
   // Simple Secret Verification so random people cannot trigger the cron job
-  const expectedSecret = process.env.CRON_SECRET || "mindaprice-cron-secret-2025";
+  const expectedSecret = process.env.CRON_SECRET;
   const providedSecret = req.query.secret || req.headers["x-cron-secret"];
 
   if (providedSecret !== expectedSecret) {
