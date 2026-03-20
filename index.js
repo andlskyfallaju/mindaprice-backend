@@ -191,23 +191,26 @@ app.listen(port, () => console.log("Server running on port", port));
 // ---- POST /advisories/ai-draft  (generate draft for admin) ----
 app.post("/advisories/ai-draft", requireAuth, async (req, res) => {
   try {
-    // Note: We bypass `requireAdmin` for generating a draft if you want any user to be able to request one.
-    // However, they can't broadcast it without admin rights.
     const weatherOverride = req.body.weather;
+    const location = (req.body.location || "the local area").trim();
+    const lat = parseFloat(req.body.lat) || null;
+    const lon = parseFloat(req.body.lon) || null;
 
     let weatherText = "";
     if (weatherOverride) {
-      weatherText = `Current weather around the target area is approximately Temp: ${weatherOverride.temp}°C, Rain: ${weatherOverride.rain}mm, Wind: ${weatherOverride.wind}km/h.`;
+      weatherText = `Current weather around ${location} is approximately Temp: ${weatherOverride.temp}°C, Rain: ${weatherOverride.rain}mm, Wind: ${weatherOverride.wind}km/h.`;
     } else {
-      const liveWeather = await getDailyWeather();
+      // Use provided coords if available, else fall back to default
+      const liveWeather = await getDailyWeather(lat ?? undefined, lon ?? undefined);
       if (liveWeather) {
-        weatherText = `Current weather in the region is Temp: ${liveWeather.temp}°C, Rain: ${liveWeather.rain}mm, Wind: ${liveWeather.wind}km/h.`;
+        weatherText = `Current weather in ${location} is Temp: ${liveWeather.temp}°C, Rain: ${liveWeather.rain}mm, Wind: ${liveWeather.wind}km/h.`;
       }
     }
 
     const prompt = `
-      You are an expert agricultural advisor for MindaPrice ZW, a farming app in Zimbabwe.
+      You are an expert agricultural advisor for MindaPrice ZW, a smart farming app.
       Generate a short, actionable, and encouraging farming advisory broadcast (max 2-3 sentences based on WhatsApp style).
+      The user is located in: ${location}.
       ${weatherText}
       Focus on practical advice based on this weather (e.g., watering schedules, pest warnings, storage advice).
       Do NOT include greetings or sign-offs. Just the advisory content.
@@ -236,18 +239,30 @@ app.get("/advisories/trigger-ai", async (req, res) => {
   }
 
   try {
-    // Top 5 Agricultural Provinces in Zimbabwe
-    const provinces = [
-      { name: "Harare Province", lat: -17.8292, lon: 31.0522 },
-      { name: "Matebeleland Province", lat: -20.1500, lon: 28.5833 },
-      { name: "Manicaland Province", lat: -18.9728, lon: 32.6694 },
-      { name: "Midlands Province", lat: -19.4500, lon: 29.8167 },
-      { name: "Masvingo Province", lat: -20.0833, lon: 30.8333 },
-    ];
+    // Regions: read from CRON_REGIONS env var (JSON array of {name,lat,lon}) or fall back to Zimbabwe defaults
+    let provinces;
+    try {
+      provinces = process.env.CRON_REGIONS
+        ? JSON.parse(process.env.CRON_REGIONS)
+        : null;
+    } catch (_) {
+      provinces = null;
+    }
+
+    if (!provinces || provinces.length === 0) {
+      // Default: Top 5 Agricultural Provinces in Zimbabwe
+      provinces = [
+        { name: "Harare Province", lat: -17.8292, lon: 31.0522 },
+        { name: "Matebeleland Province", lat: -20.1500, lon: 28.5833 },
+        { name: "Manicaland Province", lat: -18.9728, lon: 32.6694 },
+        { name: "Midlands Province", lat: -19.4500, lon: 29.8167 },
+        { name: "Masvingo Province", lat: -20.0833, lon: 30.8333 },
+      ];
+    }
 
     let combinedWeatherContext = "";
 
-    // Fetch weather for all provinces
+    // Fetch weather for all regions
     for (const p of provinces) {
       const weather = await getDailyWeather(p.lat, p.lon);
       if (weather) {
@@ -256,22 +271,25 @@ app.get("/advisories/trigger-ai", async (req, res) => {
     }
 
     if (!combinedWeatherContext) {
-      return res.status(500).send("Failed to fetch weather data for any province.");
+      return res.status(500).send("Failed to fetch weather data for any region.");
     }
 
+    const regionNames = provinces.map(p => p.name).join(", ");
+
     const prompt = `
-      You are an expert agricultural advisor for MindaPrice ZW, a farming app in Zimbabwe.
-      Generate a daily farming advisory broadcast covering the major provinces. Keep it extremely concise and actionable.
+      You are an expert agricultural advisor for MindaPrice ZW, a smart farming app.
+      Generate a daily farming advisory broadcast covering these regions: ${regionNames}.
+      Keep it extremely concise and actionable.
 
       Here is the current weather data for today:
       ${combinedWeatherContext}
 
       Format the output exactly like this (use emojis where appropriate, no introduction or conclusion paragraphs):
 
-      📍 [Province Name]: [Temp]°C ([Rain]mm rain, [Wind]km/h wind)
+      📍 [Region Name]: [Temp]°C ([Rain]mm rain, [Wind]km/h wind)
       Advisory: [1-2 sentences of specific farming advice based on this exact weather pattern]
 
-      (Repeat for each province provided)
+      (Repeat for each region provided)
     `;
 
     const generatedResponse = await ai.models.generateContent({
