@@ -70,6 +70,28 @@ async function requireAdmin(req, res, next) {
   next();
 }
 
+// ---- Helper: Archive advisories older than 3 days ----
+async function archiveOldAdvisories() {
+  const threeDaysAgo = admin.firestore.Timestamp.fromDate(
+    new Date(Date.now() - 3 * 24 * 60 * 60 * 1000)
+  );
+
+  const snapshot = await db.collection("advisories")
+    .where("createdAt", "<", threeDaysAgo)
+    .where("isArchived", "!=", true)
+    .get();
+
+  if (snapshot.empty) return 0;
+
+  const batch = db.batch();
+  snapshot.docs.forEach(doc => {
+    batch.update(doc.ref, { isArchived: true });
+  });
+
+  await batch.commit();
+  return snapshot.size;
+}
+
 // ---- POST /advisories/send  (manual advisory) ----
 app.post("/advisories/send", requireAuth, requireAdmin, async (req, res) => {
   try {
@@ -81,6 +103,7 @@ app.post("/advisories/send", requireAuth, requireAdmin, async (req, res) => {
       message,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       source: "manual",
+      isArchived: false,
     });
 
     // Push to all devices subscribed to topic
@@ -263,7 +286,12 @@ app.get("/advisories/trigger-ai", async (req, res) => {
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       isAutomated: true,
       source: "cron-job",
+      isArchived: false,
     });
+
+    // 1.1 Archive old advisories (Housekeeping)
+    const archivedCount = await archiveOldAdvisories();
+    console.log(`Archived ${archivedCount} old advisories during cron.`);
 
     // 2. Broadcast FCM Push Notification
     await admin.messaging().send({
@@ -335,5 +363,23 @@ app.post("/messages/notify", async (req, res) => {
       error: "Failed to send chat notification",
       details: String(error),
     });
+  }
+});
+
+// ---- GET /advisories/maintenance (manual cleanup trigger) ----
+app.get("/advisories/maintenance", async (req, res) => {
+  const expectedSecret = process.env.CRON_SECRET;
+  const providedSecret = req.query.secret || req.headers["x-cron-secret"];
+
+  if (providedSecret !== expectedSecret) {
+    return res.status(403).send("Unauthorized");
+  }
+
+  try {
+    const count = await archiveOldAdvisories();
+    return res.send(`Successfully archived ${count} advisories.`);
+  } catch (error) {
+    console.error("Maintenance Error:", error);
+    return res.status(500).send("Error performing maintenance.");
   }
 });
