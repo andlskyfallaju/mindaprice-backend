@@ -376,8 +376,22 @@ app.get("/advisories/maintenance", async (req, res) => {
   }
 
   try {
+    // 1. Mark old ones as archived
     const count = await archiveOldAdvisories();
-    return res.send(`Successfully archived ${count} advisories.`);
+    
+    // 2. Data Migration: Ensure all others have isArchived: false
+    const snapshot = await db.collection("advisories").get();
+    const batch = db.batch();
+    let migratedCount = 0;
+    snapshot.docs.forEach(doc => {
+      if (doc.data().isArchived === undefined) {
+        batch.update(doc.ref, { isArchived: false });
+        migratedCount++;
+      }
+    });
+    if (migratedCount > 0) await batch.commit();
+
+    return res.send(`Successfully archived ${count} advisories and migrated ${migratedCount} others.`);
   } catch (error) {
     console.error("Maintenance Error:", error);
     return res.status(500).send("Error performing maintenance.");
