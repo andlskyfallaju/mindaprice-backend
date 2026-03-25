@@ -76,20 +76,29 @@ async function archiveOldAdvisories() {
     new Date(Date.now() - 3 * 24 * 60 * 60 * 1000)
   );
 
+  // Filter `createdAt` in Firestore, but handle `isArchived` in memory
+  // to prevent "query requires a composite index" errors
   const snapshot = await db.collection("advisories")
     .where("createdAt", "<", threeDaysAgo)
-    .where("isArchived", "!=", true)
     .get();
 
   if (snapshot.empty) return 0;
 
   const batch = db.batch();
+  let updatedCount = 0;
+  
   snapshot.docs.forEach(doc => {
-    batch.update(doc.ref, { isArchived: true });
+    // Only update if not already archived
+    if (doc.data().isArchived !== true) {
+      batch.update(doc.ref, { isArchived: true });
+      updatedCount++;
+    }
   });
 
-  await batch.commit();
-  return snapshot.size;
+  if (updatedCount > 0) {
+    await batch.commit();
+  }
+  return updatedCount;
 }
 
 // ---- POST /advisories/send  (manual advisory) ----
