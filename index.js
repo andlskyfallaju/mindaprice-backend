@@ -238,7 +238,7 @@ app.post("/advisories/ai-draft", requireAuth, async (req, res) => {
 });
 
 // ---- GET /advisories/trigger-ai  (automated cron webhook) ----
-app.get("/advisories/trigger-ai", async (req, res) => {
+app.get("/advisories/trigger-ai", (req, res) => {
   // Simple Secret Verification so random people cannot trigger the cron job
   const expectedSecret = process.env.CRON_SECRET;
   const providedSecret = req.query.secret || req.headers["x-cron-secret"];
@@ -247,102 +247,112 @@ app.get("/advisories/trigger-ai", async (req, res) => {
     return res.status(403).send("Unauthorized");
   }
 
-  try {
-    // Regions: read from CRON_REGIONS env var (JSON array of {name,lat,lon}) or fall back to Zimbabwe defaults
-    let provinces;
+  // Respond immediately to prevent cron-service timeouts
+  res.status(202).send("Advisory processing started in background.");
+
+  // Run the heavy operations asynchronously
+  (async () => {
     try {
-      provinces = process.env.CRON_REGIONS
-        ? JSON.parse(process.env.CRON_REGIONS)
-        : null;
-    } catch (_) {
-      provinces = null;
-    }
-
-    if (!provinces || provinces.length === 0) {
-      // Default: Top 5 Agricultural Provinces in Zimbabwe
-      provinces = [
-        { name: "Harare Province", lat: -17.8292, lon: 31.0522 },
-        { name: "Matebeleland Province", lat: -20.1500, lon: 28.5833 },
-        { name: "Manicaland Province", lat: -18.9728, lon: 32.6694 },
-        { name: "Midlands Province", lat: -19.4500, lon: 29.8167 },
-        { name: "Masvingo Province", lat: -20.0833, lon: 30.8333 },
-      ];
-    }
-
-    let combinedWeatherContext = "";
-
-    // Fetch weather for all regions
-    for (const p of provinces) {
-      const weather = await getDailyWeather(p.lat, p.lon);
-      if (weather) {
-        combinedWeatherContext += `${p.name}: Temp: ${weather.temp}°C, Precipitation: ${weather.rain}mm, Wind speed: ${weather.wind}km/h.\n`;
+      // Find active regions from Firestore users
+      let activeRegions = {};
+      try {
+        const usersSnap = await db.collection("users").get();
+        usersSnap.forEach(doc => {
+          const data = doc.data();
+          if (data.locationTopic && data.lat && data.lon) {
+            if (!activeRegions[data.locationTopic]) {
+              activeRegions[data.locationTopic] = {
+                topic: data.locationTopic,
+                lat: data.lat,
+                lon: data.lon,
+                name: data.locationName || data.locationTopic
+              };
+            }
+          }
+        });
+      } catch (e) {
+        console.error("Error fetching regions from users:", e);
       }
+
+      let provinces = Object.values(activeRegions);
+
+      if (provinces.length === 0) {
+        // Fallback: Default to Top 5 Agricultural Provinces in Zimbabwe if no users registered location
+        provinces = [
+          { name: "Harare Province", lat: -17.8292, lon: 31.0522, topic: "advisories_Harare_Zimbabwe" },
+          { name: "Matebeleland Province", lat: -20.1500, lon: 28.5833, topic: "advisories_Bulawayo_Zimbabwe" },
+          { name: "Manicaland Province", lat: -18.9728, lon: 32.6694, topic: "advisories_Manicaland_Zimbabwe" },
+          { name: "Midlands Province", lat: -19.4500, lon: 29.8167, topic: "advisories_Midlands_Zimbabwe" },
+          { name: "Masvingo Province", lat: -20.0833, lon: 30.8333, topic: "advisories_Masvingo_Zimbabwe" },
+        ];
+      }
+
+      // Process each region entirely in parallel: Fetch weather -> Ping Gemini -> Save to DB -> Push Notification
+      const regionPromises = provinces.map(async (p) => {
+        try {
+          const weather = await getDailyWeather(p.lat, p.lon);
+          if (!weather) return;
+
+          const prompt = `
+            You are an expert agricultural advisor for MindaPrice ZW, a smart farming app.
+            Generate a concise, 1-2 sentence farming advisory for: ${p.name}.
+            Current weather: Temp: ${weather.temp}°C, Precipitation: ${weather.rain}mm, Wind speed: ${weather.wind}km/h.
+            Format the output ONLY with the advisory text (no intro, no headers).
+            Optional: use 1-2 relevant emojis.
+          `;
+
+          const generatedResponse = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+          });
+          const advisoryText = generatedResponse.text.trim();
+          
+          const fullMessage = `📍 ${p.name}: ${weather.temp}°C (${weather.rain}mm rain, ${weather.wind}km/h wind)\nAdvisory: ${advisoryText}`;
+
+          // Save to Firestore specific to this topic so history works
+          await db.collection("advisories").add({
+            message: `[Automated AI Advisory]\n${fullMessage}`,
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            isAutomated: true,
+            source: "cron-job",
+            topic: p.topic,
+            isArchived: false,
+          });
+
+          // Broadcast FCM Push Notification targeted ONLY to this specific location
+          await admin.messaging().send({
+            topic: p.topic,
+            notification: {
+              title: "Daily Farming Advisory \u{1F33E}", // Wheat emoji
+              body: fullMessage,
+            },
+            data: {
+              type: "advisory",
+            },
+            android: {
+              notification: {
+                channelId: "advisory_channel",
+                priority: "high",
+              },
+            },
+          });
+        } catch (err) {
+          console.error(`Failed processing region ${p.name}:`, err);
+        }
+      });
+
+      // Wait for all regional broadcasts to finish
+      await Promise.all(regionPromises);
+
+      // 1.1 Archive old advisories (Housekeeping)
+      const archivedCount = await archiveOldAdvisories();
+      console.log(`Archived ${archivedCount} old advisories during cron.`);
+
+      console.log("Automated advisory generated and broadcasted successfully for all regions.");
+    } catch (error) {
+      console.error("Automated Trigger Error:", error);
     }
-
-    if (!combinedWeatherContext) {
-      return res.status(500).send("Failed to fetch weather data for any region.");
-    }
-
-    const regionNames = provinces.map(p => p.name).join(", ");
-
-    const prompt = `
-      You are an expert agricultural advisor for MindaPrice ZW, a smart farming app.
-      Generate a daily farming advisory broadcast covering these regions: ${regionNames}.
-      Keep it extremely concise and actionable.
-
-      Here is the current weather data for today:
-      ${combinedWeatherContext}
-
-      Format the output exactly like this (use emojis where appropriate, no introduction or conclusion paragraphs):
-
-      📍 [Region Name]: [Temp]°C ([Rain]mm rain, [Wind]km/h wind)
-      Advisory: [1-2 sentences of specific farming advice based on this exact weather pattern]
-
-      (Repeat for each region provided)
-    `;
-
-    const generatedResponse = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
-    });
-    const generatedMessage = generatedResponse.text.trim();
-
-    // 1. Save to Firestore
-    await db.collection("advisories").add({
-      message: `[Automated AI Advisory]\n${generatedMessage}`,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      isAutomated: true,
-      source: "cron-job",
-      isArchived: false,
-    });
-
-    // 1.1 Archive old advisories (Housekeeping)
-    const archivedCount = await archiveOldAdvisories();
-    console.log(`Archived ${archivedCount} old advisories during cron.`);
-
-    // 2. Broadcast FCM Push Notification
-    await admin.messaging().send({
-      topic: "advisories",
-      notification: {
-        title: "Daily Farming Advisory \u{1F33E}", // Wheat emoji
-        body: generatedMessage,
-      },
-      data: {
-        type: "advisory",
-      },
-      android: {
-        notification: {
-          channelId: "advisory_channel",
-          priority: "high",
-        },
-      },
-    });
-
-    return res.status(200).send("Automated advisory generated and broadcasted successfully.");
-  } catch (error) {
-    console.error("Automated Trigger Error:", error);
-    return res.status(500).send("Error generating automated advisory.");
-  }
+  })();
 });
 app.post("/messages/notify", async (req, res) => {
   try {
