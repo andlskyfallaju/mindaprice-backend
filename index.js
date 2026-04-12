@@ -1,16 +1,14 @@
 require("dotenv").config();
 const express = require("express");
 const admin = require("firebase-admin");
-const { GoogleGenAI } = require("@google/genai");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const app = express();
 app.use(express.json());
 
 // Initialize Gemini with the API Key from environment variables
 // Note: You must set this in your Render dashboard environment variables
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY
-});
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 // Helper function to fetch weather data for a location (defaulting to Harare)
 async function getDailyWeather(lat = -17.824858, lon = 31.053028) {
@@ -221,7 +219,7 @@ app.post("/advisories/ai-draft", requireAuth, async (req, res) => {
       Do NOT include greetings or sign-offs. Just the advisory content.
     `;
 
-    const model = ai.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
     const response = await model.generateContent(prompt);
 
     return res.json({ result: response.text.trim() });
@@ -263,7 +261,7 @@ app.post("/ai/advisor-chat", requireAuth, async (req, res) => {
       6. If you don't know something, be honest but suggest where they could find out (e.g. Agritex offices).
     `;
 
-    const model = ai.getGenerativeModel({ 
+    const model = genAI.getGenerativeModel({ 
       model: "gemini-1.5-flash",
       systemInstruction: systemInstruction 
     });
@@ -353,7 +351,7 @@ app.get("/advisories/trigger-ai", (req, res) => {
             Optional: use 1-2 relevant emojis.
           `;
 
-          const model = ai.getGenerativeModel({ model: "gemini-1.5-flash" });
+          const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
           const generatedResponse = await model.generateContent(prompt);
           const advisoryText = generatedResponse.text.trim();
           
