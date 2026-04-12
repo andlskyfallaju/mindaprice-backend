@@ -219,7 +219,7 @@ app.post("/advisories/ai-draft", requireAuth, async (req, res) => {
       Do NOT include greetings or sign-offs. Just the advisory content.
     `;
 
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
     const response = await model.generateContent(prompt);
 
     return res.json({ result: response.text.trim() });
@@ -262,7 +262,7 @@ app.post("/ai/advisor-chat", requireAuth, async (req, res) => {
     `;
 
     const model = genAI.getGenerativeModel({ 
-      model: "gemini-1.5-flash",
+      model: "gemini-1.5-flash-latest",
       systemInstruction: systemInstruction 
     });
 
@@ -351,7 +351,7 @@ app.get("/advisories/trigger-ai", (req, res) => {
             Optional: use 1-2 relevant emojis.
           `;
 
-          const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+          const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
           const generatedResponse = await model.generateContent(prompt);
           const advisoryText = generatedResponse.text.trim();
           
