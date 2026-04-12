@@ -141,9 +141,6 @@ app.post("/advisories/send", requireAuth, requireAdmin, async (req, res) => {
 
 app.get("/", (_, res) => res.send("MindaPrice ZW Backend is running! 🚀"));
 
-const port = process.env.PORT || 8080;
-app.listen(port, () => console.log("Server running on port", port));
-
  app.get("/weather/advisory", async (req, res) => {
   try {
 
@@ -231,6 +228,60 @@ app.post("/advisories/ai-draft", requireAuth, async (req, res) => {
   } catch (error) {
     console.error("Gemini Error:", error);
     return res.status(500).json({ error: "Failed to generate AI advisory.", details: String(error) });
+  }
+});
+
+// ---- POST /ai/advisor-chat (Minda: Personalized Chat) ----
+app.post("/ai/advisor-chat", requireAuth, async (req, res) => {
+  try {
+    const { message, history, farmProfile, location, lat, lon } = req.body;
+    
+    if (!message) return res.status(400).json({ error: "Message is empty" });
+
+    // Fetch weather context
+    let weatherText = "Weather data is currently unavailable.";
+    const weather = await getDailyWeather(lat, lon);
+    if (weather) {
+      weatherText = `The current weather in ${location || "the area"} is: ${weather.temp}°C with ${weather.rain}mm of rainfall and ${weather.wind}km/h winds.`;
+    }
+
+    // Prepare system prompt for "Minda"
+    const systemInstruction = `
+      You are Minda, a wise, friendly, and highly knowledgeable Zimbabwean agricultural mentor. 
+      Your goal is to help local farmers succeed by providing practical, science-backed, and traditionally sound advice.
+      
+      User Profile: ${farmProfile || "The user hasn't described their farm yet. Ask them politely what they are growing."}
+      Context: ${weatherText}
+      Location: ${location || "Zimbabwe"}
+      
+      Conversation Rules:
+      1. Always stay in character as Minda. Be encouraging, warm, and professional.
+      2. Keep responses relatively concise but thorough enough to be helpful (WhatsApp style).
+      3. Use Shona or Ndebele phrases occasionally (like "Zvakanaka" or "Salibonani") to stay relatable, but keep the main advice in English.
+      4. If the weather is dangerous (high heat, heavy rain), prioritize safety warnings.
+      5. Never give financial advice outside of agricultural context.
+      6. If you don't know something, be honest but suggest where they could find out (e.g. Agritex offices).
+    `;
+
+    const model = ai.getGenerativeModel({ 
+      model: "gemini-1.5-flash",
+      systemInstruction: systemInstruction 
+    });
+
+    const chat = model.startChat({
+      history: (history || []).map(h => ({
+        role: h.role === "user" ? "user" : "model",
+        parts: [{ text: h.text }]
+      })),
+    });
+
+    const result = await chat.sendMessage(message);
+    const responseText = result.response.text();
+
+    return res.json({ response: responseText });
+  } catch (error) {
+    console.error("Minda Chat Error:", error);
+    return res.status(500).json({ error: "Minda is temporarily resting. Try again in a moment.", details: String(error) });
   }
 });
 
@@ -433,3 +484,6 @@ app.get("/advisories/maintenance", async (req, res) => {
     return res.status(500).send("Error performing maintenance.");
   }
 });
+
+const port = process.env.PORT || 8080;
+app.listen(port, () => console.log("Minda Backend live on port", port));
