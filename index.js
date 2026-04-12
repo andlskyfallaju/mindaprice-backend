@@ -219,7 +219,7 @@ app.post("/advisories/ai-draft", requireAuth, async (req, res) => {
       Do NOT include greetings or sign-offs. Just the advisory content.
     `;
 
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" }, { apiVersion: "v1" });
     const response = await model.generateContent(prompt);
 
     return res.json({ result: response.text.trim() });
@@ -262,9 +262,9 @@ app.post("/ai/advisor-chat", requireAuth, async (req, res) => {
     `;
 
     const model = genAI.getGenerativeModel({ 
-      model: "gemini-1.5-flash-latest",
+      model: "gemini-1.5-flash",
       systemInstruction: systemInstruction 
-    });
+    }, { apiVersion: "v1" });
 
     const chat = model.startChat({
       history: (history || []).map(h => ({
@@ -351,7 +351,7 @@ app.get("/advisories/trigger-ai", (req, res) => {
             Optional: use 1-2 relevant emojis.
           `;
 
-          const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
+          const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" }, { apiVersion: "v1" });
           const generatedResponse = await model.generateContent(prompt);
           const advisoryText = generatedResponse.text.trim();
           
@@ -480,6 +480,27 @@ app.get("/advisories/maintenance", async (req, res) => {
   } catch (error) {
     console.error("Maintenance Error:", error);
     return res.status(500).send("Error performing maintenance.");
+  }
+});
+
+// ---- GET /ai/debug (List available models) ----
+app.get("/ai/debug", async (req, res) => {
+  try {
+    // We can use the REST API via fetch or a manual call since listModels isn't 
+    // consistently exposed in every SDK version's main class.
+    const url = `https://generativelanguage.googleapis.com/v1/models?key=${process.env.GEMINI_API_KEY}`;
+    const response = await fetch(url);
+    const data = await response.json();
+    
+    // Return a clean list of supported models
+    res.json({
+      status: "Running",
+      apiVersion: "v1",
+      models: data.models ? data.models.map(m => m.name) : "No models found",
+      raw: data
+    });
+  } catch (error) {
+    res.status(500).json({ error: "Debug failed", details: String(error) });
   }
 });
 
