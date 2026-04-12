@@ -139,8 +139,7 @@ app.post("/advisories/send", requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
-// ---- GET /health ----
-app.get("/health", (_, res) => res.json({ ok: true }));
+app.get("/", (_, res) => res.send("MindaPrice ZW Backend is running! 🚀"));
 
 const port = process.env.PORT || 8080;
 app.listen(port, () => console.log("Server running on port", port));
@@ -225,10 +224,8 @@ app.post("/advisories/ai-draft", requireAuth, async (req, res) => {
       Do NOT include greetings or sign-offs. Just the advisory content.
     `;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
-    });
+    const model = ai.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const response = await model.generateContent(prompt);
 
     return res.json({ result: response.text.trim() });
   } catch (error) {
@@ -301,10 +298,8 @@ app.get("/advisories/trigger-ai", (req, res) => {
             Optional: use 1-2 relevant emojis.
           `;
 
-          const generatedResponse = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: prompt,
-          });
+          const model = ai.getGenerativeModel({ model: "gemini-1.5-flash" });
+          const generatedResponse = await model.generateContent(prompt);
           const advisoryText = generatedResponse.text.trim();
           
           const fullMessage = `📍 ${p.name}: ${weather.temp}°C (${weather.rain}mm rain, ${weather.wind}km/h wind)\nAdvisory: ${advisoryText}`;
