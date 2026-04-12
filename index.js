@@ -11,7 +11,8 @@ app.use(express.json());
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 // Helper to try multiple models in case of regional quota (limit:0) errors
-async function callGemini(message, history = [], systemPrompt = "", isDraft = false) {
+// imageData: optional { mimeType: string, base64: string }
+async function callGemini(message, history = [], systemPrompt = "", isDraft = false, imageData = null) {
   const models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite"];
   let lastError = null;
 
@@ -25,7 +26,7 @@ async function callGemini(message, history = [], systemPrompt = "", isDraft = fa
         const result = await model.generateContent(fullPrompt);
         return result.response.text().trim();
       } else {
-        // For chat with history
+        // For chat with history (and optional image)
         const chatHistory = [
           { role: "user", parts: [{ text: systemPrompt }] },
           { role: "model", parts: [{ text: "Understood. I am Minda, and I am ready to help you with your farm. Zvakanaka!" }] },
@@ -35,7 +36,24 @@ async function callGemini(message, history = [], systemPrompt = "", isDraft = fa
           }))
         ];
         const chat = model.startChat({ history: chatHistory });
-        const result = await chat.sendMessage(message);
+
+        // Build multimodal parts if an image is included
+        let messageParts;
+        if (imageData) {
+          messageParts = [
+            {
+              inlineData: {
+                mimeType: imageData.mimeType,
+                data: imageData.base64,
+              }
+            },
+            { text: message || "Please analyse this image." }
+          ];
+        } else {
+          messageParts = message;
+        }
+
+        const result = await chat.sendMessage(messageParts);
         return result.response.text();
       }
     } catch (err) {
@@ -259,9 +277,9 @@ app.post("/advisories/ai-draft", requireAuth, async (req, res) => {
 // ---- POST /ai/advisor-chat (Minda: Personalized Chat) ----
 app.post("/ai/advisor-chat", requireAuth, async (req, res) => {
   try {
-    const { message, history, farmProfile, location, lat, lon } = req.body;
+    const { message, history, farmProfile, location, lat, lon, imageBase64, imageMimeType } = req.body;
     
-    if (!message) return res.status(400).json({ error: "Message is empty" });
+    if (!message && !imageBase64) return res.status(400).json({ error: "Message or image is required" });
 
     // Fetch weather context
     let weatherText = "Weather data is currently unavailable.";
@@ -286,9 +304,13 @@ app.post("/ai/advisor-chat", requireAuth, async (req, res) => {
       4. If the weather is dangerous (high heat, heavy rain), prioritize safety warnings.
       5. Never give financial advice outside of agricultural context.
       6. If you don't know something, be honest but suggest where they could find out (e.g. Agritex offices).
+      7. If the user sends an image, analyse it carefully and provide agricultural insights about what you see (crop health, disease, pests, soil, etc.).
     `;
 
-    const responseText = await callGemini(message, history || [], systemInstruction, false);
+    // Build image data payload if present
+    const imageData = imageBase64 ? { base64: imageBase64, mimeType: imageMimeType || "image/jpeg" } : null;
+
+    const responseText = await callGemini(message || "Please analyse this image.", history || [], systemInstruction, false, imageData);
     return res.json({ response: responseText });
   } catch (error) {
     console.error("Minda Chat Error:", error);
