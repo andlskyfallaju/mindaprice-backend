@@ -213,7 +213,7 @@ app.post("/advisories/ai-draft", requireAuth, async (req, res) => {
     const systemInstruction = `You are an expert agricultural advisor for MindaPrice ZW, a smart farming app. Generate a short, actionable, and encouraging farming advisory broadcast (max 2-3 sentences based on WhatsApp style). Do NOT include greetings or sign-offs. Just the advisory content.`;
     const prompt = `The user is located in: ${location}. ${weatherText} Focus on practical advice based on this weather (e.g., watering schedules, pest warnings, storage advice).`;
 
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" }, { apiVersion: "v1" });
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
     const fullPrompt = `${systemInstruction}\n\nUser Task: ${prompt}`;
     const response = await model.generateContent(fullPrompt);
 
@@ -257,8 +257,8 @@ app.post("/ai/advisor-chat", requireAuth, async (req, res) => {
     `;
 
     const model = genAI.getGenerativeModel({ 
-      model: "gemini-2.0-flash"
-    }, { apiVersion: "v1" });
+      model: "gemini-1.5-flash"
+    });
 
     // Inject system persona as the first "user" interaction if no history exists,
     // or as a guide for the current turn. This avoids the "systemInstruction" field bug.
@@ -356,7 +356,7 @@ app.get("/advisories/trigger-ai", (req, res) => {
             Optional: use 1-2 relevant emojis.
           `;
 
-          const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" }, { apiVersion: "v1" });
+          const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
           const generatedResponse = await model.generateContent(prompt);
           const advisoryText = generatedResponse.text.trim();
           
