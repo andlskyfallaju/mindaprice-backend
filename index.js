@@ -12,7 +12,7 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 // Helper to try multiple models in case of regional quota (limit:0) errors
 async function callGemini(message, history = [], systemPrompt = "", isDraft = false) {
-  const models = ["gemini-2.0-flash-001", "gemini-2.0-flash-lite", "gemini-2.0-flash", "gemini-2.0-pro"];
+  const models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite"];
   let lastError = null;
 
   for (const modelName of models) {
