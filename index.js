@@ -10,6 +10,44 @@ app.use(express.json());
 // Note: You must set this in your Render dashboard environment variables
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
+// Helper to try multiple models in case of regional quota (limit:0) errors
+async function callGemini(message, history = [], systemPrompt = "", isDraft = false) {
+  const models = ["gemini-2.0-flash-001", "gemini-2.0-flash-lite", "gemini-2.0-flash", "gemini-2.0-pro"];
+  let lastError = null;
+
+  for (const modelName of models) {
+    try {
+      const model = genAI.getGenerativeModel({ model: modelName }, { apiVersion: "v1" });
+      
+      if (isDraft) {
+        // For advisories/drafts
+        const fullPrompt = `${systemPrompt}\n\nUser Task: ${message}`;
+        const result = await model.generateContent(fullPrompt);
+        return result.response.text().trim();
+      } else {
+        // For chat with history
+        const chatHistory = [
+          { role: "user", parts: [{ text: systemPrompt }] },
+          { role: "model", parts: [{ text: "Understood. I am Minda, and I am ready to help you with your farm. Zvakanaka!" }] },
+          ...history.map(h => ({
+            role: h.role === "user" ? "user" : "model",
+            parts: [{ text: h.text }]
+          }))
+        ];
+        const chat = model.startChat({ history: chatHistory });
+        const result = await chat.sendMessage(message);
+        return result.response.text();
+      }
+    } catch (err) {
+      lastError = err;
+      console.warn(`Model ${modelName} failed:`, err.message);
+      // If it's not a quota error, stop and throw
+      if (!err.message.includes("quota") && !err.message.includes("429")) throw err;
+    }
+  }
+  throw lastError;
+}
+
 // Helper function to fetch weather data for a location (defaulting to Harare)
 async function getDailyWeather(lat = -17.824858, lon = 31.053028) {
   try {
@@ -210,14 +248,8 @@ app.post("/advisories/ai-draft", requireAuth, async (req, res) => {
       }
     }
 
-    const systemInstruction = `You are an expert agricultural advisor for MindaPrice ZW, a smart farming app. Generate a short, actionable, and encouraging farming advisory broadcast (max 2-3 sentences based on WhatsApp style). Do NOT include greetings or sign-offs. Just the advisory content.`;
-    const prompt = `The user is located in: ${location}. ${weatherText} Focus on practical advice based on this weather (e.g., watering schedules, pest warnings, storage advice).`;
-
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-lite" }, { apiVersion: "v1" });
-    const fullPrompt = `${systemInstruction}\n\nUser Task: ${prompt}`;
-    const response = await model.generateContent(fullPrompt);
-
-    return res.json({ result: response.text.trim() });
+    const result = await callGemini(prompt, [], systemInstruction, true);
+    return res.json({ result: result.trim() });
   } catch (error) {
     console.error("Gemini Error:", error);
     return res.status(500).json({ error: "Failed to generate AI advisory.", details: String(error) });
@@ -256,31 +288,7 @@ app.post("/ai/advisor-chat", requireAuth, async (req, res) => {
       6. If you don't know something, be honest but suggest where they could find out (e.g. Agritex offices).
     `;
 
-    const model = genAI.getGenerativeModel({ 
-      model: "gemini-2.0-flash-lite"
-    }, { apiVersion: "v1" });
-
-    // Inject system persona as the first "user" interaction if no history exists,
-    // or as a guide for the current turn. This avoids the "systemInstruction" field bug.
-    const chatHistory = [
-      {
-        role: "user",
-        parts: [{ text: systemInstruction }]
-      },
-      {
-        role: "model",
-        parts: [{ text: "Understood. I am Minda, and I am ready to help you with your farm. Zvakanaka!" }]
-      },
-      ...(history || []).map(h => ({
-        role: h.role === "user" ? "user" : "model",
-        parts: [{ text: h.text }]
-      }))
-    ];
-
-    const chat = model.startChat({ history: chatHistory });
-    const result = await chat.sendMessage(message);
-    const responseText = result.response.text();
-
+    const responseText = await callGemini(message, history || [], systemInstruction, false);
     return res.json({ response: responseText });
   } catch (error) {
     console.error("Minda Chat Error:", error);
@@ -348,18 +356,7 @@ app.get("/advisories/trigger-ai", (req, res) => {
           const weather = await getDailyWeather(p.lat, p.lon);
           if (!weather) return;
 
-          const prompt = `
-            You are an expert agricultural advisor for MindaPrice ZW, a smart farming app.
-            Generate a concise, 1-2 sentence farming advisory for: ${p.name}.
-            Current weather: Temp: ${weather.temp}°C, Precipitation: ${weather.rain}mm, Wind speed: ${weather.wind}km/h.
-            Format the output ONLY with the advisory text (no intro, no headers).
-            Optional: use 1-2 relevant emojis.
-          `;
-
-          const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-lite" }, { apiVersion: "v1" });
-          const generatedResponse = await model.generateContent(prompt);
-          const advisoryText = generatedResponse.text.trim();
-          
+          const advisoryText = await callGemini(prompt, [], "Farming advisor persona.", true);
           const fullMessage = `📍 ${p.name}: ${weather.temp}°C (${weather.rain}mm rain, ${weather.wind}km/h wind)\nAdvisory: ${advisoryText}`;
 
           // Save to Firestore specific to this topic so history works
