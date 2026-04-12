@@ -277,7 +277,8 @@ app.post("/advisories/ai-draft", requireAuth, async (req, res) => {
 // ---- POST /ai/advisor-chat (Minda: Personalized Chat) ----
 app.post("/ai/advisor-chat", requireAuth, async (req, res) => {
   try {
-    const { message, history, farmProfile, location, lat, lon, imageBase64, imageMimeType } = req.body;
+    const { message, history, farmProfile, location, lat, lon, preferredLanguage, imageBase64, imageMimeType } = req.body;
+    const lang = preferredLanguage || "English";
     
     if (!message && !imageBase64) return res.status(400).json({ error: "Message or image is required" });
 
@@ -300,7 +301,7 @@ app.post("/ai/advisor-chat", requireAuth, async (req, res) => {
       Conversation Rules:
       1. Always stay in character as Minda. Be encouraging, warm, and professional.
       2. Keep responses relatively concise but thorough enough to be helpful (WhatsApp style).
-      3. Use Shona or Ndebele phrases occasionally (like "Zvakanaka" or "Salibonani") to stay relatable, but keep the main advice in English.
+      3. CRITICAL LANGUAGE RULE: The user's preferred language is ${lang}. You MUST translate your entire response and speak fluently in ${lang}. However, if there is no direct translation for a complex agricultural term, you may use the standard English term.
       4. If the weather is dangerous (high heat, heavy rain), prioritize safety warnings.
       5. Never give financial advice outside of agricultural context.
       6. If you don't know something, be honest but suggest where they could find out (e.g. Agritex offices).
