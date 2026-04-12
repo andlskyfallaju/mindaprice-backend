@@ -220,7 +220,7 @@ app.post("/users/register-location", requireAuth, async (req, res) => {
   }
 });
 
- app.get("/weather/advisory", async (req, res) => {
+app.get("/weather/advisory", async (req, res) => {
   try {
 
     // Pull from query parameters if provided, else default to Harare central
@@ -290,6 +290,14 @@ app.post("/advisories/ai-draft", requireAuth, async (req, res) => {
         weatherText = `Current weather in ${location} is Temp: ${liveWeather.temp}°C, Rain: ${liveWeather.rain}mm, Wind: ${liveWeather.wind}km/h.`;
       }
     }
+
+    const systemInstruction = `
+      You are Minda, a wise and friendly Zimbabwean agricultural mentor. 
+      Your task is to draft a concise, professional farming advisory based on the provided weather data.
+      Keep it practical and targeted to smallholder farmers. 
+      Do not include meta-text like "Here is the draft".
+    `;
+    const prompt = `Location: ${location}\n${weatherText}\n\nDraft a concise farming advisory.`;
 
     const result = await callGemini(prompt, [], systemInstruction, true);
     return res.json({ result: result.trim() });
