@@ -2,6 +2,7 @@ require("dotenv").config();
 const express = require("express");
 const admin = require("firebase-admin");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const pLimit = require("p-limit");
 
 const app = express();
 app.use(express.json());
@@ -195,6 +196,30 @@ app.post("/advisories/send", requireAuth, requireAdmin, async (req, res) => {
 
 app.get("/", (_, res) => res.send("MindaPrice ZW Backend is running! 🚀"));
 
+// ---- POST /users/register-location (called by Flutter on login/launch) ----
+app.post("/users/register-location", requireAuth, async (req, res) => {
+  try {
+    const { locationTopic, lat, lon, locationName } = req.body;
+    if (!locationTopic || lat == null || lon == null) {
+      return res.status(400).json({ error: "Missing locationTopic, lat, or lon" });
+    }
+
+    // Upsert into active_regions collection — one doc per region topic
+    await db.collection("active_regions").doc(locationTopic).set({
+      topic: locationTopic,
+      lat: parseFloat(lat),
+      lon: parseFloat(lon),
+      name: locationName || locationTopic,
+      lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    return res.json({ success: true });
+  } catch (e) {
+    console.error("register-location error:", e);
+    return res.status(500).json({ error: "Failed to register location", details: String(e) });
+  }
+});
+
  app.get("/weather/advisory", async (req, res) => {
   try {
 
@@ -339,25 +364,24 @@ app.get("/advisories/trigger-ai", (req, res) => {
   // Run the heavy operations asynchronously
   (async () => {
     try {
-      // Find active regions from Firestore users
+      // Feature 2: Read from lightweight active_regions collection (1 Firestore read)
+      // instead of sweeping the entire users collection.
       let activeRegions = {};
       try {
-        const usersSnap = await db.collection("users").get();
-        usersSnap.forEach(doc => {
+        const regionsSnap = await db.collection("active_regions").get();
+        regionsSnap.forEach(doc => {
           const data = doc.data();
-          if (data.locationTopic && data.lat && data.lon) {
-            if (!activeRegions[data.locationTopic]) {
-              activeRegions[data.locationTopic] = {
-                topic: data.locationTopic,
-                lat: data.lat,
-                lon: data.lon,
-                name: data.locationName || data.locationTopic
-              };
-            }
+          if (data.topic && data.lat && data.lon) {
+            activeRegions[data.topic] = {
+              topic: data.topic,
+              lat: data.lat,
+              lon: data.lon,
+              name: data.name || data.topic,
+            };
           }
         });
       } catch (e) {
-        console.error("Error fetching regions from users:", e);
+        console.error("Error fetching active_regions:", e);
       }
 
       let provinces = Object.values(activeRegions);
@@ -373,8 +397,10 @@ app.get("/advisories/trigger-ai", (req, res) => {
         ];
       }
 
-      // Process each region entirely in parallel: Fetch weather -> Ping Gemini -> Save to DB -> Push Notification
-      const regionPromises = provinces.map(async (p) => {
+      // Feature 1: Process regions with p-limit(3) — max 3 concurrent Gemini calls
+      // to stay within the 15 RPM free-tier quota.
+      const limit = pLimit(3);
+      const regionPromises = provinces.map((p) => limit(async () => {
         try {
           const weather = await getDailyWeather(p.lat, p.lon);
           if (!weather) return;
@@ -396,12 +422,10 @@ app.get("/advisories/trigger-ai", (req, res) => {
           await admin.messaging().send({
             topic: p.topic,
             notification: {
-              title: "Daily Farming Advisory \u{1F33E}", // Wheat emoji
+              title: "Daily Farming Advisory 🌾",
               body: fullMessage,
             },
-            data: {
-              type: "advisory",
-            },
+            data: { type: "advisory" },
             android: {
               notification: {
                 channelId: "advisory_channel",
@@ -412,9 +436,9 @@ app.get("/advisories/trigger-ai", (req, res) => {
         } catch (err) {
           console.error(`Failed processing region ${p.name}:`, err);
         }
-      });
+      }));
 
-      // Wait for all regional broadcasts to finish
+      // Wait for all batched regional broadcasts to finish
       await Promise.all(regionPromises);
 
       // 1.1 Archive old advisories (Housekeeping)
