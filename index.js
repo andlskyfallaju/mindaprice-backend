@@ -240,8 +240,12 @@ app.get("/advisories/trigger-ai", (req, res) => {
   const expectedSecret = process.env.CRON_SECRET;
   const providedSecret = req.query.secret || req.headers["x-cron-secret"];
 
-  if (providedSecret !== expectedSecret) {
-    return res.status(403).send("Unauthorized");
+  if (!expectedSecret) {
+    return res.status(500).send("Server Error: CRON_SECRET not set in Render environment.");
+  }
+
+  if (providedSecret?.trim() !== expectedSecret.trim()) {
+    return res.status(403).send(`Unauthorized: Secret mismatch. Provided: ${providedSecret ? "Yes" : "No"}`);
   }
 
   // Respond immediately to prevent cron-service timeouts
