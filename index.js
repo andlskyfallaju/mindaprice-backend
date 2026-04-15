@@ -3,9 +3,28 @@ const express = require("express");
 const admin = require("firebase-admin");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const pLimit = require("p-limit");
+const rateLimit = require("express-rate-limit");
+
+// ---- 1. Environment Validation (Validate at startup) ----
+const requiredEnv = ["GEMINI_API_KEY", "FIREBASE_SERVICE_ACCOUNT_BASE64", "CRON_SECRET"];
+requiredEnv.forEach(v => {
+  if (!process.env[v]) {
+    console.error(`ERROR: Missing required environment variable: ${v}`);
+    process.exit(1);
+  }
+});
 
 const app = express();
 app.use(express.json());
+
+// ---- 2. Rate Limiting ----
+const aiLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 10, // limit each IP to 10 requests per windowMs
+  message: { error: "Too many requests, please slow down." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // Initialize Gemini with the API Key from environment variables
 // Note: You must set this in your Render dashboard environment variables
@@ -159,7 +178,7 @@ async function archiveOldAdvisories() {
 // ---- POST /advisories/send  (manual advisory) ----
 app.post("/advisories/send", requireAuth, requireAdmin, async (req, res) => {
   try {
-    const message = (req.body.message || "").trim();
+    const message = (req.body.message || "").trim().slice(0, 2000);
     if (!message) return res.status(400).json({ error: "Message is empty" });
 
     // Save advisory in Firestore
@@ -236,10 +255,12 @@ app.get("/weather/advisory", async (req, res) => {
     const response = await fetch(url);
     const data = await response.json();
 
-    const rainProb = data.hourly.precipitation_probability[0];
-    const rainMm = data.hourly.precipitation[0];
-    const wind = data.hourly.wind_speed_10m[0];
-    const temp = data.hourly.temperature_2m[0];
+    // Use the current hour index so we get live conditions, not midnight's data
+    const hourIndex = new Date().getHours();
+    const rainProb = data.hourly.precipitation_probability[hourIndex];
+    const rainMm = data.hourly.precipitation[hourIndex];
+    const wind = data.hourly.wind_speed_10m[hourIndex];
+    const temp = data.hourly.temperature_2m[hourIndex];
 
     let advisory =
       "Weather conditions are stable. Proceed with normal farming activities.";
@@ -273,10 +294,10 @@ app.get("/weather/advisory", async (req, res) => {
 });
 
 // ---- POST /advisories/ai-draft  (generate draft for admin) ----
-app.post("/advisories/ai-draft", requireAuth, async (req, res) => {
+app.post("/advisories/ai-draft", requireAuth, requireAdmin, aiLimiter, async (req, res) => {
   try {
     const weatherOverride = req.body.weather;
-    const location = (req.body.location || "the local area").trim();
+    const location = (req.body.location || "the local area").trim().slice(0, 500);
     const lat = parseFloat(req.body.lat) || null;
     const lon = parseFloat(req.body.lon) || null;
 
@@ -308,9 +329,10 @@ app.post("/advisories/ai-draft", requireAuth, async (req, res) => {
 });
 
 // ---- POST /ai/advisor-chat (Minda: Personalized Chat) ----
-app.post("/ai/advisor-chat", requireAuth, async (req, res) => {
+app.post("/ai/advisor-chat", requireAuth, aiLimiter, async (req, res) => {
   try {
-    const { message, history, farmProfile, location, lat, lon, preferredLanguage, imageBase64, imageMimeType } = req.body;
+    const { history, farmProfile, location, lat, lon, preferredLanguage, imageBase64, imageMimeType } = req.body;
+    const message = (req.body.message || "").trim().slice(0, 2000);
     const lang = preferredLanguage || "English";
     
     if (!message && !imageBase64) return res.status(400).json({ error: "Message or image is required" });
@@ -413,6 +435,8 @@ app.get("/advisories/trigger-ai", (req, res) => {
           const weather = await getDailyWeather(p.lat, p.lon);
           if (!weather) return;
 
+          // Build the prompt here (was previously undefined, causing ReferenceError)
+          const prompt = `Location: ${p.name}\nWeather: Temp ${weather.temp}°C, Rain ${weather.rain}mm, Wind ${weather.wind}km/h.\n\nDraft a concise farming advisory for smallholder farmers.`;
           const advisoryText = await callGemini(prompt, [], "Farming advisor persona.", true);
           const fullMessage = `📍 ${p.name}: ${weather.temp}°C (${weather.rain}mm rain, ${weather.wind}km/h wind)\nAdvisory: ${advisoryText}`;
 
@@ -459,7 +483,7 @@ app.get("/advisories/trigger-ai", (req, res) => {
     }
   })();
 });
-app.post("/messages/notify", async (req, res) => {
+app.post("/messages/notify", requireAuth, async (req, res) => {
   try {
     const { recipientUid, senderUid, senderName, message } = req.body;
 
@@ -493,7 +517,7 @@ app.post("/messages/notify", async (req, res) => {
       },
       android: {
         notification: {
-          channelId: "advisory_channel",
+          channelId: "chat_channel",
           priority: "high",
         },
       },
@@ -507,6 +531,52 @@ app.post("/messages/notify", async (req, res) => {
     });
   }
 });
+
+// ---- POST /ratings/notify (Notify user of a new review) ----
+app.post("/ratings/notify", requireAuth, async (req, res) => {
+  try {
+    const { recipientUid, score, senderName } = req.body;
+
+    if (!recipientUid || score == null || !senderName) {
+      return res.status(400).json({ error: "Missing recipientUid, score, or senderName" });
+    }
+
+    const userDoc = await db.collection("users").doc(recipientUid).get();
+    if (!userDoc.exists) return res.status(404).json({ error: "Recipient not found" });
+
+    const data = userDoc.data();
+    // OPT-OUT Check: Default to true if not set
+    const notificationsEnabled = data.reviewNotificationsEnabled !== false;
+    const fcmToken = data.fcmToken;
+
+    if (!notificationsEnabled || !fcmToken) {
+      return res.json({ success: true, skipped: true, reason: !fcmToken ? "No FCM" : "Disabled" });
+    }
+
+    await admin.messaging().send({
+      token: fcmToken,
+      notification: {
+        title: "New Marketplace Rating! ⭐",
+        body: `${senderName} gave you a ${score}/5 rating. Your reputation is growing!`,
+      },
+      data: {
+        type: "rating",
+      },
+      android: {
+        notification: {
+          channelId: "chat_channel", // Reuse chat channel for high priority
+          priority: "high",
+        },
+      },
+    });
+
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("Rating notify error:", error);
+    return res.status(500).json({ error: "Failed to send rating notification" });
+  }
+});
+
 
 // ---- GET /advisories/maintenance (manual cleanup trigger) ----
 app.get("/advisories/maintenance", async (req, res) => {
