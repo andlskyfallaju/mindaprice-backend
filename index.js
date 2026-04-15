@@ -2,7 +2,8 @@ require("dotenv").config();
 const express = require("express");
 const admin = require("firebase-admin");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
-const pLimit = require("p-limit");
+const pLimitImport = require("p-limit");
+const pLimit = pLimitImport.default || pLimitImport;
 const rateLimit = require("express-rate-limit");
 
 // ---- 1. Environment Validation (Validate at startup) ----
@@ -33,7 +34,7 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 // Helper to try multiple models in case of regional quota (limit:0) errors
 // imageData: optional { mimeType: string, base64: string }
 async function callGemini(message, history = [], systemPrompt = "", isDraft = false, imageData = null) {
-  const models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite"];
+  const models = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"];
   let lastError = null;
 
   for (const modelName of models) {
