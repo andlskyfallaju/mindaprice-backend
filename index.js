@@ -53,11 +53,11 @@ async function listAvailableModels() {
 // imageData: optional { mimeType: string, base64: string }
 async function callGemini(message, history = [], systemPrompt = "", isDraft = false, imageData = null) {
   const models = [
-    "gemini-1.5-flash", 
-    "gemini-1.5-flash-latest", 
-    "gemini-1.5-flash-002",
-    "gemini-2.0-flash", 
-    "gemini-1.5-pro",
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-flash-latest",
+    "gemini-pro-latest",
+    "gemini-2.5-pro",
     "gemini-pro"
   ];
   let lastError = null;
@@ -106,15 +106,8 @@ async function callGemini(message, history = [], systemPrompt = "", isDraft = fa
       lastError = err;
       console.warn(`Model ${modelName} failed:`, err.message);
       
-      // FALLBACK LOGIC: If it's a 429 (quota), 404 (not found), or 403 (forbidden), try the next model.
-      const msg = err.message.toLowerCase();
-      if (msg.includes("quota") || msg.includes("429") || msg.includes("404") || msg.includes("403") || msg.includes("not found")) {
-        console.log(`Retrying with next model after ${modelName} errored...`);
-        continue;
-      }
-      
-      // If it's a different kind of error, we might still want to try the next model just in case,
-      // but let's be more permissive for now to ensure reliability.
+      // PERMISSIVE FALLBACK: Try the next model for ANY error (404, 403, 429, etc.)
+      console.log(`Retrying with next model after ${modelName} failed...`);
       continue;
     }
   }
