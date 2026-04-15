@@ -34,12 +34,12 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 // Helper to try multiple models in case of regional quota (limit:0) errors
 // imageData: optional { mimeType: string, base64: string }
 async function callGemini(message, history = [], systemPrompt = "", isDraft = false, imageData = null) {
-  const models = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"];
+  const models = ["gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-2.0-flash", "gemini-1.5-pro"];
   let lastError = null;
 
   for (const modelName of models) {
     try {
-      const model = genAI.getGenerativeModel({ model: modelName }, { apiVersion: "v1" });
+      const model = genAI.getGenerativeModel({ model: modelName }, { apiVersion: "v1beta" });
       
       if (isDraft) {
         // For advisories/drafts
