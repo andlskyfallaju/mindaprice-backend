@@ -16,6 +16,7 @@ requiredEnv.forEach(v => {
 });
 
 const app = express();
+app.set("trust proxy", 1); 
 app.use(express.json());
 
 // ---- 2. Rate Limiting ----
