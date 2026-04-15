@@ -31,10 +31,35 @@ const aiLimiter = rateLimit({
 // Note: You must set this in your Render dashboard environment variables
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// Helper to try multiple models in case of regional quota (limit:0) errors
+// Helper to discover which models are actually available for the current API Key
+async function listAvailableModels() {
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${process.env.GEMINI_API_KEY}`;
+    const response = await fetch(url);
+    const data = await response.json();
+    if (data.models) {
+      const names = data.models.map(m => m.name.replace("models/", ""));
+      console.log("AI DEBUG: Available models for this key:", names);
+      return names;
+    }
+    console.warn("AI DEBUG: No models found in ListModels response:", data);
+  } catch (e) {
+    console.error("AI DEBUG: Failed to list models:", e.message);
+  }
+  return [];
+}
+
+// Helper to try multiple models in case of regional quota or model unavailability errors
 // imageData: optional { mimeType: string, base64: string }
 async function callGemini(message, history = [], systemPrompt = "", isDraft = false, imageData = null) {
-  const models = ["gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-2.0-flash", "gemini-1.5-pro"];
+  const models = [
+    "gemini-1.5-flash", 
+    "gemini-1.5-flash-latest", 
+    "gemini-1.5-flash-002",
+    "gemini-2.0-flash", 
+    "gemini-1.5-pro",
+    "gemini-pro"
+  ];
   let lastError = null;
 
   for (const modelName of models) {
@@ -80,10 +105,24 @@ async function callGemini(message, history = [], systemPrompt = "", isDraft = fa
     } catch (err) {
       lastError = err;
       console.warn(`Model ${modelName} failed:`, err.message);
-      // If it's not a quota error, stop and throw
-      if (!err.message.includes("quota") && !err.message.includes("429")) throw err;
+      
+      // FALLBACK LOGIC: If it's a 429 (quota), 404 (not found), or 403 (forbidden), try the next model.
+      const msg = err.message.toLowerCase();
+      if (msg.includes("quota") || msg.includes("429") || msg.includes("404") || msg.includes("403") || msg.includes("not found")) {
+        console.log(`Retrying with next model after ${modelName} errored...`);
+        continue;
+      }
+      
+      // If it's a different kind of error, we might still want to try the next model just in case,
+      // but let's be more permissive for now to ensure reliability.
+      continue;
     }
   }
+
+  // If we reach here, all hardcoded models failed. Try discovery as a last resort.
+  console.error("All preferred models failed. Attempting model discovery...");
+  await listAvailableModels();
+
   throw lastError;
 }
 
@@ -480,7 +519,8 @@ app.get("/advisories/trigger-ai", (req, res) => {
 
       console.log("Automated advisory generated and broadcasted successfully for all regions.");
     } catch (error) {
-      console.error("Automated Trigger Error:", error);
+      console.error("CRON ERROR: Automated Trigger Failed:", error);
+      console.error("CRON ERROR DETAILS:", JSON.stringify(error, Object.getOwnPropertyNames(error)));
     }
   })();
 });
