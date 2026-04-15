@@ -251,9 +251,16 @@ app.get("/", (_, res) => res.send("MindaPrice ZW Backend is running! 🚀"));
 
 // ---- POST /users/register-location (called by Flutter on login/launch) ----
 app.post("/users/register-location", requireAuth, async (req, res) => {
+  const startTime = Date.now();
   try {
+    const uid = req.user.uid;
     const { locationTopic, lat, lon, locationName } = req.body;
+    
+    console.log(`[LOCATION_DEBUG] Attempting to register location for user: ${uid}`);
+    console.log(`[LOCATION_DEBUG] Data: topic=${locationTopic}, lat=${lat}, lon=${lon}, name=${locationName}`);
+
     if (!locationTopic || lat == null || lon == null) {
+      console.warn(`[LOCATION_DEBUG] Missing required fields for user: ${uid}`);
       return res.status(400).json({ error: "Missing locationTopic, lat, or lon" });
     }
 
@@ -266,9 +273,12 @@ app.post("/users/register-location", requireAuth, async (req, res) => {
       lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
 
+    const duration = Date.now() - startTime;
+    console.log(`[LOCATION_DEBUG] Successfully registered location for ${uid} in ${duration}ms`);
     return res.json({ success: true });
   } catch (e) {
-    console.error("register-location error:", e);
+    const duration = Date.now() - startTime;
+    console.error(`[LOCATION_DEBUG] ERROR for user ${req.user?.uid} after ${duration}ms:`, e);
     return res.status(500).json({ error: "Failed to register location", details: String(e) });
   }
 });
